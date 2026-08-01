@@ -1,0 +1,63 @@
+name: Build Canvas Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to build and push (the canvas-lms release tag this branch is pinned to)"
+        required: true
+        default: "2026-05-20.143"
+
+env:
+  ECR_REGISTRY: 985384755045.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: tutorify/canvas-lms
+  AWS_REGION: us-east-1
+
+jobs:
+  build:
+    name: Build & push
+    # Requires a GitHub "larger runner" with this exact label to exist in the tutorify-ai org
+    # (console-only setup, see the plan's Task 4 Step 1 — not something this workflow file can
+    # create). Update this label if the larger runner ends up named differently.
+    runs-on: ubuntu-latest-8-cores
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::985384755045:role/TutorifyGithubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        run: |
+          docker build \
+            -f Dockerfile.production \
+            --build-arg RUBY=3.4 \
+            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ inputs.image_tag }}" \
+            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ inputs.image_tag }}"
+          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+
+      - name: Summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Canvas image build
+
+          | Field | Value |
+          |-------|-------|
+          | **Tag** | \`${{ inputs.image_tag }}\` |
+          | **Image** | \`${ECR_REGISTRY}/${ECR_REPOSITORY}\` |
+          | **Commit** | \`${GITHUB_SHA::7}\` |
+          EOF
