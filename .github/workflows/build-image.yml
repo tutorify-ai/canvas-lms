@@ -7,6 +7,14 @@ on:
         description: "Image tag to build and push (the canvas-lms release tag this branch is pinned to)"
         required: true
         default: "2026-05-20.143"
+      platform:
+        description: "Target platform. tutorify-preprod-eks runs Graviton (t4g/m6g), so arm64 is the deployable one."
+        required: true
+        default: "linux/arm64"
+        type: choice
+        options:
+          - linux/arm64
+          - linux/amd64
 
 env:
   ECR_REGISTRY: 985384755045.dkr.ecr.us-east-1.amazonaws.com
@@ -16,9 +24,13 @@ env:
 jobs:
   build:
     name: Build & push
-    # Requires a GitHub "larger runner" with this exact label to exist in the tutorify-ai org
-    # (console-only setup, see the plan's Task 4 Step 1 — not something this workflow file can
-    # create). Update this label if the larger runner ends up named differently.
+    # NOTE: GitHub "larger runners" are NOT available on this org's plan tier (confirmed via
+    # the API on 2026-08-02), so this label does not resolve and the workflow cannot currently
+    # be dispatched. A self-hosted fleet exists in the internal account (labels: self-hosted,
+    # linux, x64, tutorify-internal) but is amd64-only and its PAT/webhook wiring is unfinished.
+    # Building arm64 there would need QEMU emulation, which is very slow for Canvas. Resolve
+    # before dispatching: either add an arm64 architecture to the runner module's nodepool, or
+    # accept the emulated build. Until then, builds are done locally (see docs).
     runs-on: ubuntu-latest-8-cores
     permissions:
       id-token: write
@@ -36,28 +48,67 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build image
+      # Only does anything when the runner arch differs from inputs.platform; a no-op otherwise.
+      - name: Set up QEMU (cross-build support)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build to an ARCH-SUFFIXED tag, never the bare release tag. The release tag is an OCI
+      # image index assembled in the next step, so a build for one architecture can never
+      # overwrite another architecture's image under the same tag.
+      - name: Build and push (arch-suffixed tag)
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PLATFORM: ${{ inputs.platform }}
         run: |
-          docker build \
+          set -euo pipefail
+          ARCH="${PLATFORM#linux/}"
+          docker buildx build \
+            --platform "$PLATFORM" \
             -f Dockerfile.production \
             --build-arg RUBY=3.4 \
-            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ inputs.image_tag }}" \
-            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.version=${IMAGE_TAG}" \
+            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}-${ARCH}" \
+            --push \
             .
 
-      - name: Push image
+      # Rebuild the release-tag index from every arch-suffixed tag that exists, so adding a
+      # second architecture later extends the index instead of replacing it.
+      - name: Assemble multi-arch index under the release tag
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ inputs.image_tag }}"
-          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+          set -euo pipefail
+          SRC=()
+          for a in arm64 amd64; do
+            REF="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}-${a}"
+            if docker manifest inspect "$REF" >/dev/null 2>&1; then
+              echo "including $REF"
+              SRC+=("$REF")
+            fi
+          done
+          docker buildx imagetools create --tag "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" "${SRC[@]}"
 
       - name: Summary
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PLATFORM: ${{ inputs.platform }}
         run: |
+          set -euo pipefail
+          PLATFORMS=$(docker buildx imagetools inspect "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
+            --format '{{range .Manifest.Manifests}}{{if ne .Platform.Architecture "unknown"}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}{{end}}')
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Canvas image build
 
           | Field | Value |
           |-------|-------|
-          | **Tag** | \`${{ inputs.image_tag }}\` |
+          | **Tag** | \`${IMAGE_TAG}\` |
+          | **Built platform** | \`${PLATFORM}\` |
+          | **Index now contains** | \`${PLATFORMS}\` |
           | **Image** | \`${ECR_REGISTRY}/${ECR_REPOSITORY}\` |
           | **Commit** | \`${GITHUB_SHA::7}\` |
           EOF
