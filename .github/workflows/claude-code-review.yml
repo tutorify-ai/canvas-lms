@@ -8,10 +8,7 @@ jobs:
   claude-review:
     # Skip for very large PRs to avoid excessive API usage
     # Only run in the instructure-internal org
-    if: |
-      github.repository_owner == 'instructure-internal' &&
-      github.event.pull_request.changed_files <= 100 &&
-      github.event.pull_request.additions <= 5000
+    if: "(contains(fromJSON('[\"workflow_dispatch\",\"schedule\"]'), github.event_name) || github.actor == 'ashkankamyab-1') && (github.repository_owner == 'instructure-internal' &&\ngithub.event.pull_request.changed_files <= 100 &&\ngithub.event.pull_request.additions <= 5000\n)"
 
     runs-on: ubuntu-latest
     permissions:
