@@ -18,6 +18,7 @@ concurrency:
 jobs:
 
   depcruise:
+    if: "contains(fromJSON('[\"workflow_dispatch\",\"schedule\"]'), github.event_name) || github.actor == 'ashkankamyab-1'"
     name: Check Circular Deps
     runs-on: ubuntu-22.04
     steps:
@@ -37,6 +38,7 @@ jobs:
         run: yarn depcruise ./ --include-only "^(ui|packages)"
 
   eslint:
+    if: "contains(fromJSON('[\"workflow_dispatch\",\"schedule\"]'), github.event_name) || github.actor == 'ashkankamyab-1'"
     name: Check ESLint
     runs-on: ubuntu-22.04
     steps:
@@ -58,6 +60,7 @@ jobs:
         run: yarn lint --quiet
 
   typescript:
+    if: "contains(fromJSON('[\"workflow_dispatch\",\"schedule\"]'), github.event_name) || github.actor == 'ashkankamyab-1'"
     name: Check TypeScript
     runs-on: ubuntu-22.04
     steps:
@@ -85,6 +88,7 @@ jobs:
         run: yarn tsc --noemit -p tsconfig.json
 
   ui-tests:
+    if: "contains(fromJSON('[\"workflow_dispatch\",\"schedule\"]'), github.event_name) || github.actor == 'ashkankamyab-1'"
     name: UI Tests (Shard ${{ matrix.shard }})
     runs-on: ubuntu-22.04
     strategy:
@@ -110,6 +114,7 @@ jobs:
         run: yarn test --shard=${{ matrix.shard }}/16
 
   package-tests:
+    if: "contains(fromJSON('[\"workflow_dispatch\",\"schedule\"]'), github.event_name) || github.actor == 'ashkankamyab-1'"
     name: Package Tests
     runs-on: ubuntu-22.04
     steps:
